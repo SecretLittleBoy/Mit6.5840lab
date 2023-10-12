@@ -19,7 +19,8 @@ package raft
 
 import (
 	//	"bytes"
-	"math/rand"
+	//"log"
+	//"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +28,6 @@ import (
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
 )
-
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -62,16 +62,50 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	state        RaftState     //current state of the server
+	electionTime time.Time     //elect when current time is electionTime
+	applyCh      chan ApplyMsg //applyCh is a channel on which the tester or service expects Raft to send ApplyMsg messages.
+	heartBeatInterval time.Duration //the interval of heart beat
+
+	//Persistent state on all servers:>>>>>>>>begin
+	//latest term server has seen (initialized to 0 on first boot, increases monotonically)
+	//服务器看到的最新任期（首次启动时初始化为0，单调增加）
+	currentTerm int
+	//candidateId that received vote in current term (or null if none)
+	//当前任期内获得选票的候选人ID（如果没有则为空）
+	votedFor int
+	//log entries; each entry contains command for state machine, and term when entry was received by leader (first index is 1)
+	//日志条目；每个条目包含状态机的命令，以及领导者收到条目的时间（第一个索引是1）
+	log       []LogEntry
+	logIndex0 int
+	//Persistent state on all servers:>>>>>>>>end
+
+	//Volatile state on all servers:>>>>>>>>begin
+	//index of highest log entry known to be committed (initialized to 0, increases monotonically)
+	//已知被提交的最高日志条目的索引（初始化为0，单调增加）
+	commitIndex int
+	//index of highest log entry applied to state machine (initialized to 0, increases monotonically)
+	//已应用于状态机的最高日志条目的索引（初始化为0，单调增加）
+	lastApplied int
+	//Volatile state on all servers:>>>>>>>>end
+
+	//Volatile state on leaders:>>>>>>>>begin
+	//for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
+	//对于每个服务器，要发送给该服务器的下一个日志条目的索引（初始化为领导者的最后一个日志索引+1）
+	nextIndex []int
+	//for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
+	//对于每个服务器，已知在服务器上复制的最高日志条目的索引（初始化为0，单调增加）
+	matchIndex []int
+	//Volatile state on leaders:>>>>>>>>end
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
 	// Your code here (2A).
-	return term, isleader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.currentTerm, rf.state == Leader
 }
 
 // save Raft's persistent state to stable storage,
@@ -91,7 +125,6 @@ func (rf *Raft) persist() {
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
 }
-
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
@@ -113,7 +146,6 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
-
 // the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
@@ -123,22 +155,51 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term 	   int //candidate’s term
+	CandidateId int //candidate requesting vote
+	LastLogIndex int //index of candidate’s last log entry
+	LastLogTerm int //term of candidate’s last log entry
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term        int //currentTerm, for candidate to update itself
+	VoteGranted bool //true means candidate received vote
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term < rf.currentTerm{
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		return
+	}
+	if args.Term > rf.currentTerm{
+		rf.currentTerm = args.Term
+		rf.votedFor = -1
+		rf.state = Follower
+	}
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId{
+		if args.LastLogTerm > rf.log[len(rf.log)-1].Term || (args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex >= rf.log[len(rf.log)-1].Index){
+			rf.votedFor = args.CandidateId
+			rf.resetElectionTimer()
+			reply.Term = rf.currentTerm
+			reply.VoteGranted = true
+			return
+		}
+	}
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
+	return
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -173,7 +234,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -192,7 +252,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -221,12 +280,18 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
-
-
+		rf.mu.Lock()
+		if rf.state == Leader{
+			rf.distributeEntries(true)
+		}else if time.Now().After(rf.electionTime) {
+			rf.leaderElection()
+		}
+		rf.mu.Unlock()
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		//ms := 50 + (rand.Int63() % 300)
+		//time.Sleep(time.Duration(ms) * time.Millisecond)
+		time.Sleep(rf.heartBeatInterval)
 	}
 }
 
@@ -247,13 +312,25 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.applyCh = applyCh
+	rf.state = Follower
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.heartBeatInterval = 50 * time.Millisecond
+	rf.resetElectionTimer()
 
+	rf.log = make([]LogEntry, 0)
+	rf.logIndex0 = 0
+	rf.log = append(rf.log, LogEntry{-1, 0, 0})
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
 
 	return rf
 }

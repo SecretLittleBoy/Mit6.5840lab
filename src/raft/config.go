@@ -42,7 +42,7 @@ type config struct {
 	t           *testing.T
 	finished    int32
 	net         *labrpc.Network
-	n           int
+	n           int // number of servers
 	rafts       []*Raft
 	applyErr    []string // from apply channel readers
 	connected   []bool   // whether each server is on the net
@@ -64,7 +64,8 @@ var ncpu_once sync.Once
 
 func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 	ncpu_once.Do(func() {
-		if runtime.NumCPU() < 2 {
+		numCPU:=runtime.NumCPU()
+		if numCPU < 2 {
 			fmt.Printf("warning: only one CPU, which may conceal locking bugs\n")
 		}
 		rand.Seed(makeSeed())
