@@ -62,87 +62,29 @@ func (rf *Raft) candidateRequestVote(args RequestVoteArgs, peer int, voteCount *
 	}
 }
 
-func (rf *Raft) distributeEntries(isHeartBeat bool) {//以leader的log为准，其他server如果有更新的log，直接删除新log
-	for peer_id,_ := range rf.peers{
-		if peer_id == rf.me{
-			rf.resetElectionTimer()
-			continue
-		}
-		if rf.log[len(rf.log)-1].Index >= rf.nextIndex[peer_id] || isHeartBeat{
-			peerNextIndex := rf.nextIndex[peer_id]
-			myLastLogIndex := rf.log[len(rf.log)-1].Index
-			if peerNextIndex <= 0 {
-				peerNextIndex = 1
-			}
-			if peerNextIndex > myLastLogIndex + 1{
-				peerNextIndex = myLastLogIndex + 1 //todo:different from example code
-			}
-			entries := rf.log[peerNextIndex:]
-			preLog := rf.log[peerNextIndex-1]
-			args := AppendEntriesArgs{
-				Term: rf.currentTerm,
-				LeaderId: rf.me,
-				PrevLogIndex: preLog.Index,
-				PrevLogTerm: preLog.Term,
-				Entries: entries,
-				LeaderCommit: rf.commitIndex,
-			}
-			go rf.leaderSendEntries(peer_id, &args)
-		}
-	}
-}
-
-func (rf *Raft) leaderSendEntries(peer int, args *AppendEntriesArgs){
-	reply := AppendEntriesReply{}
-	ok := rf.sendAppendEntries(peer, args, &reply)
-	if ok{
-		if reply.Success{
-			rf.nextIndex[peer] = args.PrevLogIndex + len(args.Entries) + 1
-			rf.matchIndex[peer] = args.PrevLogIndex + len(args.Entries)
-		}else{
-			rf.nextIndex[peer]--
-		}
-	}
-}
-
-func (rf *Raft) sendAppendEntries(peer int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool{
-	ok := rf.peers[peer].Call("Raft.AppendEntries", args, reply)
-	return ok
-}
-
-func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply){
+//RequestVote RPC handler.
+func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.Term < rf.currentTerm{
+	if args.Term <= rf.currentTerm {
 		reply.Term = rf.currentTerm
-		reply.Success = false
+		reply.VoteGranted = false
 		return
-	} else if args.Term > rf.currentTerm{
+	} else {
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
 		rf.state = Follower
+		if args.LastLogTerm > rf.log[len(rf.log)-1].Term || (args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex >= rf.log[len(rf.log)-1].Index) {
+			rf.votedFor = args.CandidateId
+			rf.resetElectionTimer()
+			reply.Term = rf.currentTerm
+			reply.VoteGranted = true
+			return
+		} else {
+			reply.Term = rf.currentTerm
+			reply.VoteGranted = false
+			return
+		}
 	}
-	if rf.state == Candidate{
-		rf.state = Follower
-	}
-	reply.Term = rf.currentTerm
-	//DPrintf("server %d receive append entries from %d, args: %v", rf.me, args.LeaderId, args)
-	//DPrintf("server %d 's len(rf.log): %d",rf.me,len(rf.log));
-	if args.PrevLogIndex > rf.log[len(rf.log)-1].Index{
-		reply.Success = false
-		return
-	}
-	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm{
-		reply.Success = false
-		return
-	}
-
-	rf.log = rf.log[:args.PrevLogIndex+1]
-	rf.log = append(rf.log, args.Entries...)
-
-	if args.LeaderCommit > rf.commitIndex{
-		rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].Index)
-	}
-	reply.Success = true
-	rf.resetElectionTimer()
 }

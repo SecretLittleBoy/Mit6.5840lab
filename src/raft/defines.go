@@ -19,6 +19,8 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term int
 	Success bool
+	//xterm int //与AppendEntriesArgs冲突的本raft的index的term
+	//xindex int //与AppendEntriesArgs冲突的本raft的index
 }
 
 func min(a int, b int) int {
