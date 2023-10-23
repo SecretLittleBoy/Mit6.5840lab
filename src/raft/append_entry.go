@@ -39,11 +39,21 @@ func (rf *Raft) distributeEntries(isHeartBeat bool) {//以leader的log为准，�
 func (rf *Raft) leaderSendEntries(peer int, args *AppendEntriesArgs){
 	reply := AppendEntriesReply{}
 	ok := rf.sendAppendEntries(peer, args, &reply)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if ok{
 		if reply.Success{
 			rf.nextIndex[peer] = args.PrevLogIndex + len(args.Entries) + 1
 			rf.matchIndex[peer] = args.PrevLogIndex + len(args.Entries)
 		}else{
+			if(reply.Term > rf.currentTerm){
+				rf.currentTerm = reply.Term
+				rf.votedFor = -1
+				rf.state = Follower
+				rf.persist()
+				rf.resetElectionTimer()
+				return
+			}
 			rf.nextIndex[peer]--
 		}
 	}
@@ -79,6 +89,7 @@ func (rf *Raft) sendAppendEntries(peer int, args *AppendEntriesArgs, reply *Appe
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply){
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.resetElectionTimer()
 	if args.Term < rf.currentTerm{
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -108,12 +119,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].Index)
 	}
 	reply.Success = true
-	rf.resetElectionTimer()
 	rf.apply()
 	DPrintf("server %d receive append entries from %d, args: %v", rf.me, args.LeaderId, args)
-	DPrintf("server %d 's len(rf.log): %d",rf.me,len(rf.log));
-	for i:=0;i<len(rf.log);i++ {
-		DPrintf("server %d 's log: %v",rf.me,rf.log[i]);
-	}
-	DPrintf("server %d 's commitIndex: %d",rf.me,rf.commitIndex);
 }
