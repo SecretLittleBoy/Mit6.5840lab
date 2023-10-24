@@ -19,8 +19,7 @@ package raft
 
 import (
 	"bytes"
-	"os"
-	//"log"
+	"log"
 	//"math/rand"
 	"sync"
 	"sync/atomic"
@@ -119,12 +118,13 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	raftstate := w.Bytes()
+	rf.persister.Save(raftstate, nil)
 }
 
 // restore previously persisted state.
@@ -147,18 +147,17 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	var currentTerm int
-	var votedFor int
-	var log []LogEntry
-	if d.Decode(&currentTerm) != nil ||
-		d.Decode(&votedFor) != nil ||
-		d.Decode(&log) != nil {
-		DPrintf("[%v]: readPersist error", rf.me)
-		os.Exit(1)
+	var decodedCurrentTerm int
+	var decodedVotedFor int
+	var decodedLog []LogEntry
+	if d.Decode(&decodedCurrentTerm) != nil ||
+		d.Decode(&decodedVotedFor) != nil ||
+		d.Decode(&decodedLog) != nil {
+		log.Fatal("readPersist error")
 	} else {
-		rf.currentTerm = currentTerm
-		rf.votedFor = votedFor
-		rf.log = log
+		rf.currentTerm = decodedCurrentTerm
+		rf.votedFor = decodedVotedFor
+		rf.log = decodedLog
 	}
 }
 
@@ -321,7 +320,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.applyCond = sync.NewCond(&rf.mu)
 	// initialize from state persisted before a crash
-	//rf.readPersist(persister.ReadRaftState())
+	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()

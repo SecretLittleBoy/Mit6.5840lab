@@ -14,6 +14,7 @@ func (rf *Raft) leaderElection(){
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	rf.state = Candidate
+	rf.persist()
 	rf.resetElectionTimer()
 	voteCount := 1
 	requestVoteArgs := RequestVoteArgs{
@@ -56,6 +57,7 @@ func (rf *Raft) candidateRequestVote(args RequestVoteArgs, peer int, voteCount *
 				rf.currentTerm = reply.Term
 				rf.votedFor = -1
 				rf.state = Follower
+				rf.persist()
 				return
 			}
 		}
@@ -80,10 +82,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.resetElectionTimer()
 			reply.Term = rf.currentTerm
 			reply.VoteGranted = true
+			rf.persist()
 			return
 		} else {
 			reply.Term = rf.currentTerm
 			reply.VoteGranted = false
+			rf.persist()
 			return
 		}
 	}

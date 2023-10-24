@@ -98,6 +98,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
 		rf.state = Follower
+		rf.persist()
 	}
 	if rf.state == Candidate {
 		rf.state = Follower
@@ -129,6 +130,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	reply.Success = true
+	rf.persist()
 	rf.apply()
 	DPrintf("server %d receive append entries from %d, args: %v", rf.me, args.LeaderId, args)
 	DPrintf("server %d log: %v", rf.me, rf.log)
