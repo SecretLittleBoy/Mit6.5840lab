@@ -54,7 +54,20 @@ func (rf *Raft) leaderSendEntries(peer int, args *AppendEntriesArgs) {
 				rf.resetElectionTimer()
 				return
 			}
-			rf.nextIndex[peer]--
+			if reply.IsConflict {
+				if reply.Xterm == -1 {
+					rf.nextIndex[peer] = reply.Xlen
+				} else {
+					for i := args.PrevLogIndex; i >= 0; i-- {
+						if rf.log[i].Term <= reply.Xterm {
+							rf.nextIndex[peer] = i
+							break
+						}
+					}
+				}
+			} else {
+				rf.nextIndex[peer]--
+			}
 		}
 	}
 	rf.leaderCommitRule()
@@ -90,11 +103,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.resetElectionTimer()
-	if args.Term < rf.currentTerm {
+	if args.Term < rf.currentTerm { //对方term落后
 		reply.Term = rf.currentTerm
 		reply.Success = false
+		reply.IsConflict = false
 		return
-	} else if args.Term > rf.currentTerm {
+	} else if args.Term > rf.currentTerm { //对方term领先
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
 		rf.state = Follower
@@ -106,10 +120,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	if args.PrevLogIndex > rf.log[len(rf.log)-1].Index {
 		reply.Success = false
+		reply.IsConflict = true
+		reply.Xlen = len(rf.log)
+		reply.Xterm = -1
 		return
 	}
 	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		reply.Success = false
+		reply.IsConflict = true
+		reply.Xlen = len(rf.log)
+		reply.Xterm = rf.log[args.PrevLogIndex].Term
 		return
 	}
 
@@ -124,8 +144,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.log[LogEntry.Index] = LogEntry
 		}
 		if args.LeaderCommit > rf.commitIndex {
-			 tempCommitIndex := min(args.LeaderCommit, args.PrevLogIndex+len(args.Entries))
-			 rf.commitIndex = max(tempCommitIndex, rf.commitIndex)
+			tempCommitIndex := min(args.LeaderCommit, args.PrevLogIndex+len(args.Entries))
+			rf.commitIndex = max(tempCommitIndex, rf.commitIndex)
 		}
 	}
 
