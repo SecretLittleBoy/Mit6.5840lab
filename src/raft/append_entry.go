@@ -21,7 +21,7 @@ func (rf *Raft) distributeEntries(isHeartBeat bool) { //以leader的log为准，
 			if peerNextIndex > myLastLogIndex+1 {
 				peerNextIndex = myLastLogIndex + 1
 			}
-			entries := rf.log[peerNextIndex:min(peerNextIndex+10, myLastLogIndex+1)]
+			entries := rf.log[peerNextIndex:min(peerNextIndex+100, myLastLogIndex+1)]
 			preLog := rf.log[peerNextIndex-1]
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
@@ -102,7 +102,6 @@ func (rf *Raft) sendAppendEntries(peer int, args *AppendEntriesArgs, reply *Appe
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	defer rf.resetElectionTimer()
 	if args.Term < rf.currentTerm { //对方term落后
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -123,6 +122,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.IsConflict = true
 		reply.Xlen = len(rf.log)
 		reply.Xterm = -1
+		rf.resetElectionTimer()
 		return
 	}
 	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
@@ -130,28 +130,33 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.IsConflict = true
 		reply.Xlen = len(rf.log)
 		reply.Xterm = rf.log[args.PrevLogIndex].Term
+		rf.resetElectionTimer()
 		return
 	}
 
-	if len(rf.log) <= args.PrevLogIndex+len(args.Entries)+1 {
-		rf.log = rf.log[:args.PrevLogIndex+1]
-		rf.log = append(rf.log, args.Entries...)
-		if args.LeaderCommit > rf.commitIndex {
-			rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].Index)
+	for idx, entry := range args.Entries {
+		// append entries rpc 3
+		if entry.Index <= rf.log[len(rf.log)-1].Index && rf.log[entry.Index].Term != entry.Term {
+			rf.log= rf.log[:entry.Index]
+			rf.persist()
 		}
-	} else { //防止rpc乱序到达
-		for _, LogEntry := range args.Entries {
-			rf.log[LogEntry.Index] = LogEntry
-		}
-		if args.LeaderCommit > rf.commitIndex {
-			tempCommitIndex := min(args.LeaderCommit, args.PrevLogIndex+len(args.Entries))
-			rf.commitIndex = max(tempCommitIndex, rf.commitIndex)
+		// append entries rpc 4
+		if entry.Index > rf.log[len(rf.log)-1].Index {
+			rf.log = append(rf.log, args.Entries[idx:]...)
+			rf.persist()
+			break
 		}
 	}
 
+	if args.LeaderCommit > rf.commitIndex {
+		rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].Index)
+	}
+
 	reply.Success = true
+	rf.resetElectionTimer()
 	rf.persist()
 	rf.apply()
 	DPrintf("server %d receive append entries from %d, args: %v", rf.me, args.LeaderId, args)
 	DPrintf("server %d log: %v", rf.me, rf.log)
+	DPrintf("server %d commitIndex: %d,lastApplied: %d", rf.me, rf.commitIndex, rf.lastApplied)
 }
