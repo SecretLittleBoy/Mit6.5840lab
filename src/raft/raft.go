@@ -18,14 +18,15 @@ package raft
 //
 
 import (
-	//	"bytes"
+	"bytes"
+	"os"
 	//"log"
 	//"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	//	"6.5840/labgob"
+	"6.5840/labgob"
 	"6.5840/labrpc"
 )
 
@@ -78,7 +79,6 @@ type Raft struct {
 	//log entries; each entry contains command for state machine, and term when entry was received by leader (first index is 1)
 	//日志条目；每个条目包含状态机的命令，以及领导者收到条目的时间（第一个索引是1）
 	log       []LogEntry
-	logIndex0 int
 	//Persistent state on all servers:>>>>>>>>end
 
 	//Volatile state on all servers:>>>>>>>>begin
@@ -145,6 +145,21 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&log) != nil {
+		DPrintf("[%v]: readPersist error", rf.me)
+		os.Exit(1)
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+	}
 }
 
 // the service says it has created a snapshot that has
@@ -253,7 +268,7 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	for !rf.killed() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
@@ -261,6 +276,7 @@ func (rf *Raft) ticker() {
 		if rf.state == Leader {
 			rf.distributeEntries(true)
 		} else if time.Now().After(rf.electionTime) {
+			//println("server", rf.me, "start election")
 			rf.leaderElection()
 		}
 		rf.mu.Unlock()
@@ -297,7 +313,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.resetElectionTimer()
 
 	rf.log = make([]LogEntry, 0)
-	rf.logIndex0 = 0
 	rf.log = append(rf.log, LogEntry{-1, 0, 0})
 	rf.commitIndex = 0
 	rf.lastApplied = 0
