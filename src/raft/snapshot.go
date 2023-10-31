@@ -43,9 +43,10 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if args.LastIncludeIndex <= rf.lastIncludeIndex { //本rf的snapshot更新
-		reply.Success = false
+		reply.Success = true
 		return
-	} else if args.LastIncludeIndex >= rf.log[len(rf.log)-1].Index { //snapshot包含当前所有log的内容
+	} else if (len(rf.log) == 0 && args.LastIncludeIndex > rf.lastIncludeIndex) ||
+		(len(rf.log) > 0 && args.LastIncludeIndex >= rf.log[len(rf.log)-1].Index) { //snapshot包含当前所有log的内容
 		reply.Success = true
 		snapshotCopy := make([]byte, len(args.Snapshot))
 		copy(snapshotCopy, args.Snapshot)
@@ -83,6 +84,7 @@ func (rf *Raft) leaderSendInstallSnapshot(peer_id int, args *InstallSnapshotArgs
 		if reply.Success {
 			rf.nextIndex[peer_id] = max(args.LastIncludeIndex+1, rf.nextIndex[peer_id])
 			rf.matchIndex[peer_id] = max(args.LastIncludeIndex, rf.matchIndex[peer_id])
+			DPrintf("[%d] leader send snapshot to [%d] success", rf.me, peer_id)
 		}
 	}
 }

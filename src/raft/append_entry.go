@@ -23,11 +23,17 @@ func (rf *Raft) distributeEntries(isHeartBeat bool) { //以leader的log为准，
 					LastIncludeTerm:  rf.lastIncludeTerm,
 					LastIncludeIndex: rf.lastIncludeIndex,
 				}
+				DPrintf("[%d] leader send snapshot %d to [%d]", rf.me, args.LastIncludeIndex, peer_id)
 				go rf.leaderSendInstallSnapshot(peer_id, &args)
 				continue
 			}
 
-			myLastLogIndex := rf.log[len(rf.log)-1].Index
+			var myLastLogIndex int
+			if len(rf.log) == 0 {
+				myLastLogIndex = rf.lastIncludeIndex
+			} else {
+				myLastLogIndex = rf.log[len(rf.log)-1].Index
+			}
 			if peerNextIndex <= 0 {
 				peerNextIndex = 1
 			}
@@ -54,6 +60,7 @@ func (rf *Raft) distributeEntries(isHeartBeat bool) { //以leader的log为准，
 				Entries:      entries,
 				LeaderCommit: rf.commitIndex,
 			}
+			DPrintf("[%d] leader send entries to [%d], Entries: %v", rf.me, peer_id, entries)
 			go rf.leaderSendEntries(peer_id, &args)
 		}
 	}
@@ -97,9 +104,9 @@ func (rf *Raft) leaderSendEntries(peer int, args *AppendEntriesArgs) {
 }
 
 func (rf *Raft) leaderCommitRule() {
-	if(len(rf.log) == 0){
+	if len(rf.log) == 0 {
 		if rf.commitIndex < rf.lastIncludeIndex && rf.lastIncludeTerm == rf.currentTerm {
-			rf.commitIndex = rf.lastIncludeIndex//TODO:应该不会运行到这里
+			rf.commitIndex = rf.lastIncludeIndex //TODO:应该不会运行到这里
 			rf.apply()
 			DPrintf("[%d] leader commit index: %d. nextIndex: %v. matchIndex: %v.", rf.me, rf.commitIndex, rf.nextIndex, rf.matchIndex)
 		}
