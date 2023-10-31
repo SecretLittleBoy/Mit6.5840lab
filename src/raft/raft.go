@@ -65,7 +65,7 @@ type Raft struct {
 	state             RaftState     //current state of the server
 	electionTime      time.Time     //elect when current time is electionTime
 	applyCh           chan ApplyMsg //applyCh is a channel on which the tester or service expects Raft to send ApplyMsg messages.
-	applyCond *sync.Cond
+	applyCond         *sync.Cond
 	heartBeatInterval time.Duration //the interval of heart beat
 
 	//Persistent state on all servers:>>>>>>>>begin
@@ -77,7 +77,10 @@ type Raft struct {
 	votedFor int
 	//log entries; each entry contains command for state machine, and term when entry was received by leader (first index is 1)
 	//日志条目；每个条目包含状态机的命令，以及领导者收到条目的时间（第一个索引是1）
-	log       []LogEntry
+	log              []LogEntry
+	snapshot         []byte
+	lastIncludeIndex int
+	lastIncludeTerm  int
 	//Persistent state on all servers:>>>>>>>>end
 
 	//Volatile state on all servers:>>>>>>>>begin
@@ -123,8 +126,10 @@ func (rf *Raft) persist() {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
+	e.Encode(rf.lastIncludeTerm)
+	e.Encode(rf.lastIncludeIndex)
 	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+	rf.persister.Save(raftstate, rf.snapshot)
 }
 
 // restore previously persisted state.
@@ -133,41 +138,26 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	var decodedCurrentTerm int
 	var decodedVotedFor int
 	var decodedLog []LogEntry
+	var decodedLastIncludeTerm int
+	var decodedLastIncludeIndex int
 	if d.Decode(&decodedCurrentTerm) != nil ||
 		d.Decode(&decodedVotedFor) != nil ||
-		d.Decode(&decodedLog) != nil {
+		d.Decode(&decodedLog) != nil ||
+		d.Decode(&decodedLastIncludeTerm) != nil ||
+		d.Decode(&decodedLastIncludeIndex) != nil {
 		log.Fatal("readPersist error")
 	} else {
 		rf.currentTerm = decodedCurrentTerm
 		rf.votedFor = decodedVotedFor
 		rf.log = decodedLog
+		rf.lastIncludeTerm = decodedLastIncludeTerm
+		rf.lastIncludeIndex = decodedLastIncludeIndex
 	}
-}
-
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
-
 }
 
 // example RequestVote RPC arguments structure.
@@ -187,7 +177,6 @@ type RequestVoteReply struct {
 	Term        int  //currentTerm, for candidate to update itself
 	VoteGranted bool //true means candidate received vote
 }
-
 
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
@@ -239,11 +228,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if rf.state != Leader {
 		return -1, rf.currentTerm, false
 	} else {
-		rf.log = append(rf.log, LogEntry{command, rf.currentTerm, len(rf.log)})
+		rf.log = append(rf.log, LogEntry{command, rf.currentTerm, rf.log[len(rf.log)-1].Index + 1})
 		rf.persist()
 		rf.distributeEntries(false)
 		DPrintf("[%v]: term %v Start %v", rf.me, rf.currentTerm, command)
-		return len(rf.log) - 1, rf.currentTerm, true
+		return rf.log[(len(rf.log) - 1)].Index, rf.currentTerm, true
 	}
 }
 
@@ -321,7 +310,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCond = sync.NewCond(&rf.mu)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
+	rf.snapshot = persister.ReadSnapshot()
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
@@ -329,28 +318,48 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-
 func (rf *Raft) applier() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	for !rf.killed() {
 		if rf.commitIndex > rf.lastApplied {
-			rf.lastApplied++
-			applyMsg := ApplyMsg{
-				CommandValid: true,
-				Command: rf.log[rf.lastApplied].Command,
-				CommandIndex: rf.lastApplied,
+			if rf.lastApplied < rf.lastIncludeIndex {
+				rf.lastApplied = rf.lastIncludeIndex
+				applyMsg := ApplyMsg{
+					CommandValid:  false,
+					SnapshotValid: true,
+					Snapshot:      rf.snapshot,
+					SnapshotTerm:  rf.lastIncludeTerm,
+					SnapshotIndex: rf.lastIncludeIndex,
+				}
+				rf.mu.Unlock()
+				rf.applyCh <- applyMsg
+				rf.mu.Lock()
+			} else {
+				rf.lastApplied++
+				applyMsg := ApplyMsg{
+					CommandValid: true,
+					Command:      rf.log[rf.Index2index(rf.lastApplied)].Command,
+					CommandIndex: rf.lastApplied,
+				}
+				rf.mu.Unlock()
+				rf.applyCh <- applyMsg
+				rf.mu.Lock()
 			}
-			rf.mu.Unlock()
-			rf.applyCh <- applyMsg
-			rf.mu.Lock()
-		}else{
+		} else {
 			rf.applyCond.Wait()
 		}
-		
 	}
 }
 
 func (rf *Raft) apply() {
 	rf.applyCond.Broadcast()
+}
+
+/*
+rf.log[index].Index==Index
+make sure len(rf.log)>0
+*/
+func (rf *Raft) Index2index(Index int) int {
+	return Index - rf.log[0].Index
 }

@@ -43,12 +43,13 @@ func (rf *Raft) candidateRequestVote(args RequestVoteArgs, peer int, voteCount *
 			if *voteCount > len(rf.peers)/2 && rf.state == Candidate && rf.currentTerm == args.Term{
 				becomeLeader.Do(func() {
 					rf.state = Leader
-					lastLogIndex := len(rf.log) - 1
+					lastLogIndex := rf.log[len(rf.log) - 1].Index
 					for i, _ := range rf.peers {
 						rf.nextIndex[i] = lastLogIndex + 1
 						rf.matchIndex[i] = 0
 					}
 					rf.distributeEntries(true)
+					DPrintf("[%d] becomes leader in term %d\n", rf.me, rf.currentTerm)
 				})
 				return
 			}
@@ -66,7 +67,6 @@ func (rf *Raft) candidateRequestVote(args RequestVoteArgs, peer int, voteCount *
 
 //RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if args.Term <= rf.currentTerm {

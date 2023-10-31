@@ -1,6 +1,7 @@
 package raft
 
 type RaftState int
+
 const (
 	Follower RaftState = iota
 	Candidate
@@ -8,21 +9,20 @@ const (
 )
 
 type AppendEntriesArgs struct {
-	Term int
-	LeaderId int
+	Term         int
+	LeaderId     int
 	PrevLogIndex int
-	PrevLogTerm int
-	Entries []LogEntry
+	PrevLogTerm  int
+	Entries      []LogEntry
 	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
-	Term int
-	Success bool
+	Term       int
+	Success    bool
 	IsConflict bool //是否有冲突
-	Xterm int //与AppendEntriesArgs's PrevLogIndex冲突的本raft的index的term
-	Xindex int //与AppendEntriesArgs's PrevLogIndex冲突的本raft的index
-	Xlen int //本raft的log长度
+	Xterm      int  //与AppendEntriesArgs's PrevLogIndex冲突的本raft的index的term
+	Xindex     int  //与AppendEntriesArgs's PrevLogIndex冲突的本raft的index
 }
 
 func min(a int, b int) int {
