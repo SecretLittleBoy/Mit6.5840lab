@@ -22,7 +22,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if index >= rf.commitIndex && index >= rf.log[len(rf.log)-1].Index { //rf.log must at least have one log
+	if index <= rf.lastIncludeIndex || len(rf.log) == 0 ||
+		index >= rf.commitIndex || index >= rf.log[len(rf.log)-1].Index {
 		return
 	}
 	DPrintf("[%d] state %v called Snapshot(%d)", rf.me, rf.state, index)

@@ -15,6 +15,7 @@ func (rf *Raft) distributeEntries(isHeartBeat bool) { //以leader的log为准，
 		if (len(rf.log) == 0 && rf.lastIncludeIndex >= rf.nextIndex[peer_id]) ||
 			(len(rf.log) > 0 && rf.log[len(rf.log)-1].Index >= rf.nextIndex[peer_id]) ||
 			isHeartBeat {
+
 			peerNextIndex := rf.nextIndex[peer_id]
 
 			if peerNextIndex <= rf.lastIncludeIndex {
@@ -28,40 +29,48 @@ func (rf *Raft) distributeEntries(isHeartBeat bool) { //以leader的log为准，
 				continue
 			}
 
-			var myLastLogIndex int
 			if len(rf.log) == 0 {
-				myLastLogIndex = rf.lastIncludeIndex
-			} else {
-				myLastLogIndex = rf.log[len(rf.log)-1].Index
-			}
-			if peerNextIndex <= 0 {
-				peerNextIndex = 1
-			}
-			if peerNextIndex > myLastLogIndex+1 {
-				peerNextIndex = myLastLogIndex + 1
-			}
-			entries := rf.log[rf.Index2index(peerNextIndex):rf.Index2index(min(peerNextIndex+100, myLastLogIndex+1))]
+				args := AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderId:     rf.me,
+					PrevLogIndex: rf.lastIncludeIndex,
+					PrevLogTerm:  rf.lastIncludeTerm,
+					Entries:      []LogEntry{},
+					LeaderCommit: rf.commitIndex,
+				}
+				DPrintf("[%d] leader send entries to [%d], Entries: %v", rf.me, peer_id, args.Entries)
+				go rf.leaderSendEntries(peer_id, &args)
+			} else {//len(rf.log) > 0
+				myLastLogIndex := rf.log[len(rf.log)-1].Index
+				if peerNextIndex <= 0 {
+					peerNextIndex = 1
+				}
+				if peerNextIndex > myLastLogIndex+1 {
+					peerNextIndex = myLastLogIndex + 1
+				}
+				entries := rf.log[rf.Index2index(peerNextIndex):rf.Index2index(min(peerNextIndex+100, myLastLogIndex+1))]
 
-			var PrevLogIndex int
-			var PrevLogTerm int
-			if peerNextIndex > rf.lastIncludeIndex+1 {
-				preLog := rf.log[rf.Index2index(peerNextIndex-1)]
-				PrevLogIndex = preLog.Index
-				PrevLogTerm = preLog.Term
-			} else {
-				PrevLogIndex = rf.lastIncludeIndex
-				PrevLogTerm = rf.lastIncludeTerm
+				var PrevLogIndex int
+				var PrevLogTerm int
+				if peerNextIndex > rf.lastIncludeIndex+1 {
+					preLog := rf.log[rf.Index2index(peerNextIndex-1)]
+					PrevLogIndex = preLog.Index
+					PrevLogTerm = preLog.Term
+				} else {
+					PrevLogIndex = rf.lastIncludeIndex
+					PrevLogTerm = rf.lastIncludeTerm
+				}
+				args := AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderId:     rf.me,
+					PrevLogIndex: PrevLogIndex,
+					PrevLogTerm:  PrevLogTerm,
+					Entries:      entries,
+					LeaderCommit: rf.commitIndex,
+				}
+				DPrintf("[%d] leader send entries to [%d], Entries: %v", rf.me, peer_id, entries)
+				go rf.leaderSendEntries(peer_id, &args)
 			}
-			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: PrevLogIndex,
-				PrevLogTerm:  PrevLogTerm,
-				Entries:      entries,
-				LeaderCommit: rf.commitIndex,
-			}
-			DPrintf("[%d] leader send entries to [%d], Entries: %v", rf.me, peer_id, entries)
-			go rf.leaderSendEntries(peer_id, &args)
 		}
 	}
 }
