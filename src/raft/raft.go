@@ -157,6 +157,8 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.log = decodedLog
 		rf.lastIncludeTerm = decodedLastIncludeTerm
 		rf.lastIncludeIndex = decodedLastIncludeIndex
+		rf.commitIndex = rf.lastIncludeIndex
+		rf.lastApplied = rf.lastIncludeIndex
 	}
 }
 
@@ -228,7 +230,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if rf.state != Leader {
 		return -1, rf.currentTerm, false
 	} else {
-		rf.log = append(rf.log, LogEntry{command, rf.currentTerm, rf.log[len(rf.log)-1].Index + 1})
+		if len(rf.log) == 0 {
+			rf.log = append(rf.log, LogEntry{command, rf.currentTerm, rf.lastIncludeIndex + 1})
+		} else {
+			rf.log = append(rf.log, LogEntry{command, rf.currentTerm, rf.log[len(rf.log)-1].Index + 1})
+		}
 		rf.persist()
 		rf.distributeEntries(false)
 		DPrintf("[%v]: term %v Start %v", rf.me, rf.currentTerm, command)

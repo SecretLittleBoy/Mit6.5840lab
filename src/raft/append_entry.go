@@ -12,7 +12,9 @@ func (rf *Raft) distributeEntries(isHeartBeat bool) { //以leader的log为准，
 			rf.resetElectionTimer()
 			continue
 		}
-		if rf.log[len(rf.log)-1].Index >= rf.nextIndex[peer_id] || isHeartBeat {
+		if (len(rf.log) == 0 && rf.lastIncludeIndex >= rf.nextIndex[peer_id]) ||
+			(len(rf.log) > 0 && rf.log[len(rf.log)-1].Index >= rf.nextIndex[peer_id]) ||
+			isHeartBeat {
 			peerNextIndex := rf.nextIndex[peer_id]
 
 			if peerNextIndex <= rf.lastIncludeIndex {
@@ -64,8 +66,8 @@ func (rf *Raft) leaderSendEntries(peer int, args *AppendEntriesArgs) {
 	defer rf.mu.Unlock()
 	if ok {
 		if reply.Success {
-			rf.nextIndex[peer] = max(args.PrevLogIndex + len(args.Entries) + 1, rf.nextIndex[peer])
-			rf.matchIndex[peer] = max(args.PrevLogIndex + len(args.Entries), rf.matchIndex[peer])
+			rf.nextIndex[peer] = max(args.PrevLogIndex+len(args.Entries)+1, rf.nextIndex[peer])
+			rf.matchIndex[peer] = max(args.PrevLogIndex+len(args.Entries), rf.matchIndex[peer])
 		} else {
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
@@ -95,6 +97,14 @@ func (rf *Raft) leaderSendEntries(peer int, args *AppendEntriesArgs) {
 }
 
 func (rf *Raft) leaderCommitRule() {
+	if(len(rf.log) == 0){
+		if rf.commitIndex < rf.lastIncludeIndex && rf.lastIncludeTerm == rf.currentTerm {
+			rf.commitIndex = rf.lastIncludeIndex//TODO:应该不会运行到这里
+			rf.apply()
+			DPrintf("[%d] leader commit index: %d. nextIndex: %v. matchIndex: %v.", rf.me, rf.commitIndex, rf.nextIndex, rf.matchIndex)
+		}
+		return
+	}
 	for N := rf.log[(len(rf.log) - 1)].Index; N > rf.commitIndex; N-- {
 		if rf.log[rf.Index2index(N)].Term == rf.currentTerm {
 			count := 1
@@ -168,7 +178,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				rf.resetElectionTimer()
 				return
 			}
-		} else {//这里假定snapshot都是正确的，不会出现冲突
+		} else { //这里假定snapshot都是正确的，不会出现冲突
 			// reply.Success = false
 			// reply.IsConflict = true
 			// reply.Xterm = rf.lastIncludeTerm
@@ -188,8 +198,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if len(rf.log) > 0 { //PrevLogTerm在上条if语句已经判断过了，说明现在LogEntry可以被接受了
 		for idx, entry := range args.Entries {
-			if rf.Index2index(entry.Index) < 0 { 
-				continue;
+			if rf.Index2index(entry.Index) < 0 {
+				continue
 			}
 			// append entries rpc 3
 			if entry.Index <= rf.log[len(rf.log)-1].Index && rf.log[rf.Index2index(entry.Index)].Term != entry.Term { //如果这里还冲突，直接截断后面的log

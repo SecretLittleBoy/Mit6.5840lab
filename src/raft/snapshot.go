@@ -1,7 +1,7 @@
 package raft
 
 import (
-	//"log"
+// "log"
 )
 
 type InstallSnapshotArgs struct {
@@ -42,10 +42,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.LastIncludeIndex < rf.log[0].Index {//本rf的snapshot更新
+	if args.LastIncludeIndex <= rf.lastIncludeIndex { //本rf的snapshot更新
 		reply.Success = false
 		return
-	} else if args.LastIncludeIndex >= rf.log[len(rf.log)-1].Index{//snapshot包含当前所有log的内容
+	} else if args.LastIncludeIndex >= rf.log[len(rf.log)-1].Index { //snapshot包含当前所有log的内容
 		reply.Success = true
 		snapshotCopy := make([]byte, len(args.Snapshot))
 		copy(snapshotCopy, args.Snapshot)
@@ -67,7 +67,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.lastIncludeIndex = args.LastIncludeIndex
 		rf.lastIncludeTerm = args.LastIncludeTerm
 
-		reply.Success=true
+		reply.Success = true
 		rf.persist()
 		DPrintf("[%d] install snapshot LastIncludeTerm:%d, lastIncludeIndex:%d. Now, log:%v", rf.me, rf.lastIncludeTerm, rf.lastIncludeIndex, rf.log)
 		return
@@ -81,8 +81,8 @@ func (rf *Raft) leaderSendInstallSnapshot(peer_id int, args *InstallSnapshotArgs
 	defer rf.mu.Unlock()
 	if ok {
 		if reply.Success {
-			rf.nextIndex[peer_id] = args.LastIncludeIndex + 1
-			rf.matchIndex[peer_id] = args.LastIncludeIndex
+			rf.nextIndex[peer_id] = max(args.LastIncludeIndex+1, rf.nextIndex[peer_id])
+			rf.matchIndex[peer_id] = max(args.LastIncludeIndex, rf.matchIndex[peer_id])
 		}
 	}
 }
