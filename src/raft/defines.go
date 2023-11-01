@@ -21,8 +21,8 @@ type AppendEntriesReply struct {
 	Term       int
 	Success    bool
 	IsConflict bool //是否有冲突
-	Xterm      int  //与AppendEntriesArgs's PrevLogIndex冲突的本raft的index的term
-	Xindex     int  //与AppendEntriesArgs's PrevLogIndex冲突的本raft的index
+	Xterm      int  //-1:表示nextIndex太大；其他值：表示rf.log[args.PrevLogIndex].Term
+	Xindex     int  //Xterm==-1时，表示最后一个log的index;Xterm!=-1时，表示term小于Xterm的最后一个index
 }
 
 func min(a int, b int) int {

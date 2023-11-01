@@ -40,7 +40,7 @@ func (rf *Raft) distributeEntries(isHeartBeat bool) { //以leader的log为准，
 				}
 				DPrintf("[%d] leader send entries to [%d], Entries: %v", rf.me, peer_id, args.Entries)
 				go rf.leaderSendEntries(peer_id, &args)
-			} else {//len(rf.log) > 0
+			} else { //len(rf.log) > 0
 				myLastLogIndex := rf.log[len(rf.log)-1].Index
 				if peerNextIndex <= 0 {
 					peerNextIndex = 1
@@ -94,14 +94,20 @@ func (rf *Raft) leaderSendEntries(peer int, args *AppendEntriesArgs) {
 				return
 			}
 			if reply.IsConflict {
-				if reply.Xterm == -1 {
-					rf.nextIndex[peer] = reply.Xindex
+				if reply.Xterm == -1 {//nextIndex太大，缩小至对方的最后一个log的index+1
+					rf.nextIndex[peer] = reply.Xindex + 1
 				} else {
-					for i := args.PrevLogIndex; i >= 0; i-- {
-						if rf.log[i].Term <= reply.Xterm {
-							rf.nextIndex[peer] = i
+					var i int
+					for i = max(rf.Index2index(args.PrevLogIndex),len(rf.log)-1); i >= 0; i-- {
+						if rf.log[i].Term == reply.Xterm {
+							rf.nextIndex[peer] = min(i,rf.nextIndex[peer])//找到term等于xterm的最后一个index
 							break
+						}else if rf.log[i].Term < reply.Xterm {
+							rf.nextIndex[peer] = min(reply.Xindex,rf.nextIndex[peer])//如果term等于xterm没有log，找到term小于xterm的最后一个index
 						}
+					}
+					if i < 0 {
+						rf.nextIndex[peer] = min(rf.lastIncludeIndex,rf.nextIndex[peer])//如果term小于xterm的最后一个index没有log，缩小至snapshot的index
 					}
 				}
 			} else {
@@ -191,6 +197,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				reply.Success = false
 				reply.IsConflict = true
 				reply.Xterm = rf.log[rf.Index2index(args.PrevLogIndex)].Term
+				for i := args.PrevLogIndex - 1; i >= rf.log[0].Index; i-- {
+					if rf.log[rf.Index2index(i)].Term != reply.Xterm {
+						reply.Xindex = i//index是term小于xterm的最后一个index
+						break
+					}
+				}
 				rf.resetElectionTimer()
 				return
 			}
