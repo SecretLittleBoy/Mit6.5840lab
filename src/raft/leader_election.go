@@ -53,7 +53,12 @@ func (rf *Raft) candidateRequestVote(args RequestVoteArgs, peer int, voteCount *
 			if *voteCount > len(rf.peers)/2 && rf.state == Candidate && rf.currentTerm == args.Term {
 				becomeLeader.Do(func() {
 					rf.state = Leader
-					lastLogIndex := rf.log[len(rf.log)-1].Index
+					var lastLogIndex int
+					if len(rf.log) > 0 {
+						lastLogIndex = rf.log[len(rf.log)-1].Index
+					} else {
+						lastLogIndex = rf.lastIncludeIndex
+					}
 					for i, _ := range rf.peers {
 						rf.nextIndex[i] = lastLogIndex + 1
 						rf.matchIndex[i] = 0
@@ -79,7 +84,7 @@ func (rf *Raft) candidateRequestVote(args RequestVoteArgs, peer int, voteCount *
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.Term <= rf.currentTerm {//对方term落后
+	if args.Term <= rf.currentTerm { //对方term落后
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
@@ -88,8 +93,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = -1
 		rf.state = Follower
 		if (len(rf.log) == 0 && (args.LastLogTerm > rf.lastIncludeTerm || (args.LastLogTerm == rf.lastIncludeTerm && args.LastLogIndex >= rf.lastIncludeIndex))) ||
-			args.LastLogTerm > rf.log[len(rf.log)-1].Term ||
-			(args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex >= rf.log[len(rf.log)-1].Index) {//对方log比本rf新
+			(len(rf.log) > 0 && (args.LastLogTerm > rf.log[len(rf.log)-1].Term || (args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex >= rf.log[len(rf.log)-1].Index))) { //对方log比本rf新
 			rf.votedFor = args.CandidateId
 			rf.resetElectionTimer()
 			reply.Term = rf.currentTerm

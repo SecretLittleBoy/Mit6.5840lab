@@ -85,33 +85,38 @@ func (rf *Raft) leaderSendEntries(peer int, args *AppendEntriesArgs) {
 			rf.nextIndex[peer] = max(args.PrevLogIndex+len(args.Entries)+1, rf.nextIndex[peer])
 			rf.matchIndex[peer] = max(args.PrevLogIndex+len(args.Entries), rf.matchIndex[peer])
 		} else {
-			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
-				rf.votedFor = -1
-				rf.state = Follower
-				rf.persist()
-				rf.resetElectionTimer()
-				return
-			}
-			if reply.IsConflict {
-				if reply.Xterm == -1 {//nextIndex太大，缩小至对方的最后一个log的index+1
-					rf.nextIndex[peer] = reply.Xindex + 1
-				} else {
-					var i int
-					for i = max(rf.Index2index(args.PrevLogIndex),len(rf.log)-1); i >= 0; i-- {
-						if rf.log[i].Term == reply.Xterm {
-							rf.nextIndex[peer] = min(i,rf.nextIndex[peer])//找到term等于xterm的最后一个index
-							break
-						}else if rf.log[i].Term < reply.Xterm {
-							rf.nextIndex[peer] = min(reply.Xindex,rf.nextIndex[peer])//如果term等于xterm没有log，找到term小于xterm的最后一个index
+			if len(rf.log) == 0 { //没有log了，下次只能发snapshot
+				rf.nextIndex[peer] = rf.lastIncludeIndex
+			} else {
+				if reply.Term > rf.currentTerm {
+					rf.currentTerm = reply.Term
+					rf.votedFor = -1
+					rf.state = Follower
+					rf.persist()
+					rf.resetElectionTimer()
+					return
+				}
+				if reply.IsConflict {
+					if reply.Xterm == -1 { //nextIndex太大，缩小至对方的最后一个log的index+1
+						rf.nextIndex[peer] = reply.Xindex + 1
+					} else {
+						var i int
+						//i=max(...)是因为乱序到达的reply中PrevLogIndex可能比len(rf.log)-1大。比如：figue8的S1
+						for i = max(rf.Index2index(args.PrevLogIndex), len(rf.log)-1); i >= 0; i-- {
+							if rf.log[i].Term == reply.Xterm {
+								rf.nextIndex[peer] = min(i, rf.nextIndex[peer]) //找到term等于xterm的最后一个index
+								break
+							} else if rf.log[i].Term < reply.Xterm {
+								rf.nextIndex[peer] = min(reply.Xindex, rf.nextIndex[peer]) //如果term等于xterm没有log，找到term小于xterm的最后一个index
+							}
+						}
+						if i < 0 {
+							rf.nextIndex[peer] = min(rf.lastIncludeIndex, rf.nextIndex[peer]) //如果term小于xterm的最后一个index没有log，缩小至snapshot的index
 						}
 					}
-					if i < 0 {
-						rf.nextIndex[peer] = min(rf.lastIncludeIndex,rf.nextIndex[peer])//如果term小于xterm的最后一个index没有log，缩小至snapshot的index
-					}
+				} else {
+					rf.nextIndex[peer]--
 				}
-			} else {
-				rf.nextIndex[peer]--
 			}
 		}
 	}
@@ -199,14 +204,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				reply.Xterm = rf.log[rf.Index2index(args.PrevLogIndex)].Term
 				for i := args.PrevLogIndex - 1; i >= rf.log[0].Index; i-- {
 					if rf.log[rf.Index2index(i)].Term != reply.Xterm {
-						reply.Xindex = i//index是term小于xterm的最后一个index
+						reply.Xindex = i //index是term小于xterm的最后一个index
 						break
 					}
 				}
 				rf.resetElectionTimer()
 				return
 			}
-		} else { //这里假定snapshot都是正确的，不会出现冲突
+		} else { //这里假定snapshot压缩的log都是正确的，不会出现冲突
 			// reply.Success = false
 			// reply.IsConflict = true
 			// reply.Xterm = rf.lastIncludeTerm
@@ -218,7 +223,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if rf.lastIncludeTerm != args.PrevLogTerm {
 			reply.Success = false
 			reply.IsConflict = true
-			reply.Xterm = rf.lastIncludeTerm
+			reply.Xterm = rf.lastIncludeTerm //leader一定存在term==rf.lastIncludeTerm的log，此后leader更新nextIndex为lastIncludeTerm的最后一个log的index
+			reply.Xindex = rf.lastIncludeIndex
 			rf.resetElectionTimer()
 			return
 		}
@@ -235,7 +241,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				rf.persist()
 			}
 			// append entries rpc 4
-			if entry.Index > rf.log[len(rf.log)-1].Index {
+			if len(rf.log) == 0 || entry.Index > rf.log[len(rf.log)-1].Index {
 				rf.log = append(rf.log, args.Entries[idx:]...)
 				rf.persist()
 				break
@@ -257,5 +263,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	DPrintf("[%d] receive append entries from %d, args: %v", rf.me, args.LeaderId, args)
 	DPrintf("[%d] log: %v", rf.me, rf.log)
 	DPrintf("[%d] commitIndex: %d,lastApplied: %d", rf.me, rf.commitIndex, rf.lastApplied)
-	DPrintf("[%d] leaderCommit: %d, rf.log[len(rf.log)-1].Index: %d", rf.me, args.LeaderCommit, rf.log[len(rf.log)-1].Index)
+	if len(rf.log) > 0 {
+		DPrintf("[%d] leaderCommit: %d, rf.log[len(rf.log)-1].Index: %d", rf.me, args.LeaderCommit, rf.log[len(rf.log)-1].Index)
+	} else {
+		DPrintf("[%d] leaderCommit: %d, rf.lastIncludeIndex: %d", rf.me, args.LeaderCommit, rf.lastIncludeIndex)
+	}
 }

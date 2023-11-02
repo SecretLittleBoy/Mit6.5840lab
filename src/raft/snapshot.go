@@ -1,8 +1,8 @@
 package raft
 
-import (
+import "fmt"
+
 // "log"
-)
 
 type InstallSnapshotArgs struct {
 	Snapshot         []byte
@@ -23,7 +23,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if index <= rf.lastIncludeIndex || len(rf.log) == 0 ||
-		index >= rf.commitIndex || index >= rf.log[len(rf.log)-1].Index {
+		index > rf.commitIndex || index > rf.log[len(rf.log)-1].Index {
+		fmt.Println("snapshot error. index:", index, "lastIncludeIndex:", rf.lastIncludeIndex, "commitIndex:", rf.commitIndex, "log len:", len(rf.log))
 		return
 	}
 	DPrintf("[%d] state %v called Snapshot(%d)", rf.me, rf.state, index)
@@ -55,7 +56,9 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.log = make([]LogEntry, 0)
 		rf.lastIncludeIndex = args.LastIncludeIndex
 		rf.lastIncludeTerm = args.LastIncludeTerm
+		rf.commitIndex = args.LastIncludeIndex
 		rf.persist()
+		rf.apply()
 		DPrintf("[%d] install snapshot LastIncludeTerm:%d, lastIncludeIndex:%d. Now, log:%v", rf.me, rf.lastIncludeTerm, rf.lastIncludeIndex, rf.log)
 		return
 	} else {
@@ -70,7 +73,11 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.lastIncludeTerm = args.LastIncludeTerm
 
 		reply.Success = true
+		if rf.commitIndex < rf.lastIncludeIndex {
+			rf.commitIndex = rf.lastIncludeIndex
+		}
 		rf.persist()
+		rf.apply()
 		DPrintf("[%d] install snapshot LastIncludeTerm:%d, lastIncludeIndex:%d. Now, log:%v", rf.me, rf.lastIncludeTerm, rf.lastIncludeIndex, rf.log)
 		return
 	}
