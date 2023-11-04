@@ -47,6 +47,7 @@ var t0 = time.Now()
 func Get(cfg *config, ck *Clerk, key string, log *OpLog, cli int) string {
 	start := int64(time.Since(t0))
 	v := ck.Get(key)
+	DPrintf("Get(%v) -> %v\n", key, v)
 	end := int64(time.Since(t0))
 	cfg.op()
 	if log != nil {
@@ -65,6 +66,7 @@ func Get(cfg *config, ck *Clerk, key string, log *OpLog, cli int) string {
 func Put(cfg *config, ck *Clerk, key string, value string, log *OpLog, cli int) {
 	start := int64(time.Since(t0))
 	ck.Put(key, value)
+	DPrintf("Put(%v,%v)\n", key, value)
 	end := int64(time.Since(t0))
 	cfg.op()
 	if log != nil {
@@ -81,6 +83,7 @@ func Put(cfg *config, ck *Clerk, key string, value string, log *OpLog, cli int) 
 func Append(cfg *config, ck *Clerk, key string, value string, log *OpLog, cli int) {
 	start := int64(time.Since(t0))
 	ck.Append(key, value)
+	DPrintf("Append(%v,%v)\n", key, value)
 	end := int64(time.Since(t0))
 	cfg.op()
 	if log != nil {

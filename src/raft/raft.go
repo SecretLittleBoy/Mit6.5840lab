@@ -369,3 +369,7 @@ make sure len(rf.log)>0
 func (rf *Raft) Index2index(Index int) int {
 	return Index - rf.log[0].Index
 }
+
+func (rf *Raft) GetRaftStateSize() int {
+	return rf.persister.RaftStateSize()
+}
