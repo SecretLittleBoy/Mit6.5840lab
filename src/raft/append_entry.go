@@ -264,7 +264,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	DPrintf("[%d] log: %v", rf.me, rf.log)
 	DPrintf("[%d] commitIndex: %d,lastApplied: %d", rf.me, rf.commitIndex, rf.lastApplied)
 	if len(rf.log) > 0 {
-		DPrintf("[%d] leaderCommit: %d, rf.log[len(rf.log)-1].Index: %d", rf.me, args.LeaderCommit, rf.log[len(rf.log)-1].Index)
+		DPrintf("[%d] leaderCommit: %d, rf.lastlog.Index: %d", rf.me, args.LeaderCommit, rf.log[len(rf.log)-1].Index)
 	} else {
 		DPrintf("[%d] leaderCommit: %d, rf.lastIncludeIndex: %d", rf.me, args.LeaderCommit, rf.lastIncludeIndex)
 	}

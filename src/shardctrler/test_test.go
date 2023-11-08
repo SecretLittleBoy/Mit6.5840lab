@@ -386,18 +386,73 @@ func TestMulti(t *testing.T) {
 		t.Fatalf("Leader not found")
 	}
 	c := ck.Query(-1) // Config leader claims
-
+	time.Sleep(1 * time.Second)
 	cfg.ShutdownServer(leader)
 
 	attempts := 0
-	for isLeader, leader = cfg.Leader(); isLeader; time.Sleep(1 * time.Second) {
+	for isLeader, leader = cfg.Leader(); !isLeader; isLeader, leader = cfg.Leader() {
 		if attempts++; attempts >= 3 {
 			t.Fatalf("Leader not found")
 		}
+		time.Sleep(1 * time.Second)
 	}
-
+	DPrintf("isleader:%v , Leader is %v", isLeader, leader)
 	c1 = ck.Query(-1)
 	check_same_config(t, c, c1)
 
 	fmt.Printf("  ... Passed\n")
+}
+func TestMytest(t *testing.T) {
+	const nservers = 3
+	cfg := make_config(t, nservers, false)
+	defer cfg.cleanup()
+
+	ck := cfg.makeClient(cfg.All())
+
+	cfa := make([]Config, 6)
+	cfa[0] = ck.Query(-1)
+
+	check(t, []int{}, ck)
+
+	var gid1 int = 1
+	var gid2 int = 2
+	ck.Join(map[int][]string{
+		gid1: []string{"x", "y", "z"},
+		gid2: []string{"a", "b", "c"},
+	})
+	time.Sleep(200 * time.Millisecond)
+}
+
+func TestMuti2test(t *testing.T) {
+	const nservers = 3
+	cfg := make_config(t, nservers, false)
+	defer cfg.cleanup()
+
+	ck := cfg.makeClient(cfg.All())
+
+	var gid1 int = 1
+	var gid2 int = 2
+	ck.Join(map[int][]string{
+		gid1: []string{"x", "y", "z"},
+		gid2: []string{"a", "b", "c"},
+	})
+
+	isLeader, leader := cfg.Leader()
+	if !isLeader {
+		t.Fatalf("Leader not found")
+	}
+	c := ck.Query(-1) // Config leader claims
+	time.Sleep(300 * time.Millisecond)
+	cfg.ShutdownServer(leader)
+
+	attempts := 0
+	for isLeader, leader = cfg.Leader(); !isLeader; isLeader, leader = cfg.Leader() {
+		if attempts++; attempts >= 3 {
+			t.Fatalf("Leader not found")
+		}
+		time.Sleep(1 * time.Second)
+	}
+	DPrintf("isleader:%v , Leader is %v", isLeader, leader)
+	c1 := ck.Query(-1)
+	check_same_config(t, c, c1)
 }

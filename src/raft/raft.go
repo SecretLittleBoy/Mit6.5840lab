@@ -260,7 +260,9 @@ func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
 }
-
+func (rf *Raft) Killed() bool {
+	return rf.killed()
+}
 func (rf *Raft) ticker() {
 	for !rf.killed() {
 
