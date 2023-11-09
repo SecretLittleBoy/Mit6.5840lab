@@ -2,7 +2,10 @@ package shardctrler
 
 //
 // Shardctrler clerk.
-//
+
+//client.go:clerk
+//server.go:单个raft上的server，保证shardctrler不会因一个服务器崩溃而彻底崩溃
+//一个clerk对应多个server，多个server中有一个leader其他是follower
 
 import "6.5840/labrpc"
 import "time"

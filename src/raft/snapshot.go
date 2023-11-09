@@ -1,6 +1,6 @@
 package raft
 
-import "fmt"
+//import "fmt"
 
 // "log"
 
@@ -24,7 +24,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	defer rf.mu.Unlock()
 	if index <= rf.lastIncludeIndex || len(rf.log) == 0 ||
 		index > rf.commitIndex || index > rf.log[len(rf.log)-1].Index {
-		fmt.Println("snapshot error. index:", index, "lastIncludeIndex:", rf.lastIncludeIndex, "commitIndex:", rf.commitIndex, "log len:", len(rf.log))
+		//DPrintf("snapshot error. index:", index, "lastIncludeIndex:", rf.lastIncludeIndex, "commitIndex:", rf.commitIndex, "log len:", len(rf.log))
 		return
 	}
 	DPrintf("[%d] state %v called Snapshot(%d)", rf.me, rf.state, index)
