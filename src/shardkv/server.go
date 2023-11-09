@@ -9,6 +9,7 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
+	"6.5840/shardctrler"
 )
 
 //Each shardkv server operates as part of a replica group.
@@ -20,6 +21,8 @@ const (
 	GetOp OpType = iota
 	PutOp
 	AppendOp
+	GetShardOp
+	ReplaceShardOp
 	NopOp
 )
 
@@ -32,6 +35,11 @@ type Op struct {
 	OpId    int
 	Key     string
 	Value   string
+
+	// GetShard
+	Shard int
+	// ReplaceShard
+	KvMap map[string]string
 }
 
 type ShardKV struct {
@@ -46,13 +54,90 @@ type ShardKV struct {
 
 	// Your definitions here.
 	cond                  sync.Cond
-	kvMap                 map[string]string
+	kvMaps                [shardctrler.NShards]map[string]string
 	maxAppliedOpIdOfClerk map[int64]int
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	op := Op{OpType: GetOp, Key: args.Key, ClerkId: args.ClerkId, OpId: args.OpId}
+	_, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	} else {
+		DPrintf("[%d] start get %s", kv.me, args.Key)
+		reply.Err = OK
+		kv.mu.Lock()
+		for kv.maxAppliedOpIdOfClerk[args.ClerkId] < args.OpId {
+			kv.mu.Unlock()
+			appliedOneOp := make(chan struct{})
+			go func() {
+				kv.mu.Lock()
+				kv.cond.Wait()
+				close(appliedOneOp)
+				kv.mu.Unlock()
+			}()
+			select {
+			case <-appliedOneOp:
+			case <-time.After(100 * time.Millisecond):
+				reply.Err = ErrWrongLeader
+			}
+			if reply.Err == ErrWrongLeader {
+				break
+			}
+			kv.mu.Lock()
+		}
+		if reply.Err != ErrWrongLeader {
+			reply.Value = kv.kvMaps[key2shard(args.Key)][args.Key]
+			kv.mu.Unlock()
+		}
+		return
+	}
+}
+
+func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	// Your code here.
+	op := Op{OpType: PutOp, Key: args.Key, Value: args.Value, ClerkId: args.ClerkId, OpId: args.OpId}
+	if args.Op == "Append" {
+		op.OpType = AppendOp
+	}
+	_, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	} else {
+		DPrintf("[%d] start %s %s:%s", kv.me, args.Op, args.Key, args.Value)
+		reply.Err = OK
+		kv.mu.Lock()
+		for kv.maxAppliedOpIdOfClerk[args.ClerkId] < args.OpId {
+			kv.mu.Unlock()
+			appliedOneOp := make(chan struct{})
+			go func() {
+				kv.mu.Lock()
+				kv.cond.Wait()
+				close(appliedOneOp)
+				kv.mu.Unlock()
+			}()
+			select {
+			case <-appliedOneOp:
+			case <-time.After(100 * time.Millisecond):
+				reply.Err = ErrWrongLeader
+			}
+			if reply.Err == ErrWrongLeader {
+				break
+			}
+			kv.mu.Lock()
+		}
+		if reply.Err == OK {
+			kv.mu.Unlock()
+		}
+		return
+	}
+}
+
+func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
+	op := Op{OpType: GetShardOp, Shard: args.Shard}
 	_, _, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
@@ -80,21 +165,19 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			kv.mu.Lock()
 		}
 		if reply.Err != ErrWrongLeader {
-			reply.Value = kv.kvMap[args.Key]
+			reply.KvMap = make(map[string]string)
+			for k, v := range kv.kvMaps[args.Shard] {
+				reply.KvMap[k] = v
+			}
 			kv.mu.Unlock()
 		}
 		return
 	}
 }
 
-func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	op := Op{OpType: PutOp, Key: args.Key, Value: args.Value, ClerkId: args.ClerkId, OpId: args.OpId}
-	if args.Op == "Append" {
-		op.OpType = AppendOp
-	}
+func (kv *ShardKV) ReplaceShard(args *ReplaceShardArgs, reply *ReplaceShardReply) {
+	op := Op{OpType: ReplaceShardOp, Shard: args.Shard, KvMap: args.KvMap}
 	_, _, isLeader := kv.rf.Start(op)
-	DPrintf("[%d] start %s %s:%s", kv.me, args.Op, args.Key, args.Value)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return
@@ -175,7 +258,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.ctrlers = ctrlers
 
 	// Your initialization code here.
-	kv.kvMap = make(map[string]string)
+	for i := 0; i < shardctrler.NShards; i++ {
+		kv.kvMaps[i] = make(map[string]string)
+	}
 	kv.maxAppliedOpIdOfClerk = make(map[int64]int)
 	kv.cond = sync.Cond{L: &kv.mu}
 
@@ -207,16 +292,24 @@ func (kv *ShardKV) apply() {
 			continue
 		}
 		if op.OpType == GetOp {
-			DPrintf("[%d] get %s:%s", kv.me, op.Key, kv.kvMap[op.Key])
+			DPrintf("[%d] get %s:%s", kv.me, op.Key, kv.kvMaps[key2shard(op.Key)][op.Key])
 		} else if op.OpType == PutOp {
-			kv.kvMap[op.Key] = op.Value
+			kv.kvMaps[key2shard(op.Key)][op.Key] = op.Value
 			DPrintf("[%d] put %s:%s", kv.me, op.Key, op.Value)
 		} else if op.OpType == AppendOp {
-			kv.kvMap[op.Key] += op.Value
-			DPrintf("[%d] append %s:%s,kvmap[%s]:%s", kv.me, op.Key, op.Value, op.Key, kv.kvMap[op.Key])
+			kv.kvMaps[key2shard(op.Key)][op.Key] += op.Value
+			DPrintf("[%d] append %s:%s,kvmap[%s]:%s", kv.me, op.Key, op.Value, op.Key, kv.kvMaps[key2shard(op.Key)][op.Key])
 		} else if op.OpType == NopOp {
 			// do nothing
 			DPrintf("[%d] nop", kv.me)
+		} else if op.OpType == GetShardOp {
+			DPrintf("[%d] getshard %d", kv.me, op.Shard)
+		} else if op.OpType == ReplaceShardOp {
+			DPrintf("[%d] replaceshard %d", kv.me, op.Shard)
+			kv.kvMaps[op.Shard] = make(map[string]string)
+			for k, v := range op.KvMap {
+				kv.kvMaps[op.Shard][k] = v
+			}
 		} else {
 			log.Fatal("Unknown OpType")
 		}
@@ -227,7 +320,7 @@ func (kv *ShardKV) apply() {
 		if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize() > kv.maxraftstate {
 			w := new(bytes.Buffer)
 			e := labgob.NewEncoder(w)
-			e.Encode(kv.kvMap)
+			e.Encode(kv.kvMaps)
 			e.Encode(kv.maxAppliedOpIdOfClerk)
 			data := w.Bytes()
 			kv.rf.Snapshot(applyMsg.CommandIndex, data)

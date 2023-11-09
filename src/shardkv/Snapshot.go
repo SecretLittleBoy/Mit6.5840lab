@@ -1,10 +1,12 @@
 package shardkv
+
 import (
-	"bytes"
 	"6.5840/labgob"
+	"bytes"
 	"log"
 	//"6.5840/labrpc"
 	//"6.5840/raft"
+	"6.5840/shardctrler"
 )
 
 func (kv *ShardKV) readSnapshot(snapshot []byte) {
@@ -13,13 +15,13 @@ func (kv *ShardKV) readSnapshot(snapshot []byte) {
 	}
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
-	var kvMap map[string]string
+	var kvMaps [shardctrler.NShards]map[string]string
 	var maxAppliedOpIdOfClerk map[int64]int
-	if d.Decode(&kvMap) != nil ||
+	if d.Decode(&kvMaps) != nil ||
 		d.Decode(&maxAppliedOpIdOfClerk) != nil {
 		log.Fatal("Error when decoding snapshot")
 	} else {
-		kv.kvMap = kvMap
+		kv.kvMaps = kvMaps
 		kv.maxAppliedOpIdOfClerk = maxAppliedOpIdOfClerk
 	}
 }

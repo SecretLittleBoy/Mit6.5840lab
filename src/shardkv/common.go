@@ -46,3 +46,23 @@ type GetReply struct {
 	Err   Err
 	Value string
 }
+
+type GetShardArgs struct {
+	Shard int
+	ClerkId int64
+	OpId    int
+}
+type GetShardReply struct {
+	Err   Err
+	KvMap map[string]string
+}
+
+type ReplaceShardArgs struct {
+	Shard int
+	KvMap map[string]string
+	ClerkId int64
+	OpId    int
+}
+type ReplaceShardReply struct {
+	Err Err
+}
