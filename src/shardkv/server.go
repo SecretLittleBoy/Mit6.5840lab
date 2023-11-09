@@ -2,6 +2,7 @@ package shardkv
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
+	"6.5840/shardctrler"
 )
 
 //Each shardkv server operates as part of a replica group.
@@ -20,6 +22,8 @@ const (
 	GetOp OpType = iota
 	PutOp
 	AppendOp
+	GetShardOp
+	ReplaceShardOp
 	NopOp
 )
 
@@ -32,6 +36,11 @@ type Op struct {
 	OpId    int
 	Key     string
 	Value   string
+
+	// GetShard
+	Shard int
+	// ReplaceShard
+	KvMap map[string]string
 }
 
 type ShardKV struct {
@@ -42,22 +51,40 @@ type ShardKV struct {
 	make_end     func(string) *labrpc.ClientEnd
 	gid          int
 	ctrlers      []*labrpc.ClientEnd
+	sm           *shardctrler.Clerk
+	config       shardctrler.Config
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	cond                  sync.Cond
-	kvMap                 map[string]string
+	cond sync.Cond
+
+	//snapshot data begin
+	kvMaps                [shardctrler.NShards]map[string]string
+	shardIhave            [shardctrler.NShards]bool
 	maxAppliedOpIdOfClerk map[int64]int
+	//snapshot data end
+
+	waitForConfig sync.WaitGroup
+	waitForOp     sync.WaitGroup
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	DPrintf("[%d] get %s. waitForConfig", kv.me, args.Key)
+	kv.waitForConfig.Wait()
+	kv.waitForOp.Add(1)
+	defer kv.waitForOp.Done()
+	if _, isleader := kv.rf.GetState(); isleader && !kv.shardIhave[key2shard(args.Key)] {
+		reply.Err = ErrWrongGroup
+		return
+	}
 	op := Op{OpType: GetOp, Key: args.Key, ClerkId: args.ClerkId, OpId: args.OpId}
 	_, _, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	} else {
+		DPrintf("[%d] start get %s", kv.me, args.Key)
 		reply.Err = OK
 		kv.mu.Lock()
 		for kv.maxAppliedOpIdOfClerk[args.ClerkId] < args.OpId {
@@ -80,7 +107,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			kv.mu.Lock()
 		}
 		if reply.Err != ErrWrongLeader {
-			reply.Value = kv.kvMap[args.Key]
+			reply.Value = kv.kvMaps[key2shard(args.Key)][args.Key]
 			kv.mu.Unlock()
 		}
 		return
@@ -89,16 +116,24 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	DPrintf("[%d] %s %s:%s. waitForConfig", kv.me, args.Op, args.Key, args.Value)
+	kv.waitForConfig.Wait()
+	kv.waitForOp.Add(1)
+	defer kv.waitForOp.Done()
+	if _, isleader := kv.rf.GetState(); isleader && !kv.shardIhave[key2shard(args.Key)] {
+		reply.Err = ErrWrongGroup
+		return
+	}
 	op := Op{OpType: PutOp, Key: args.Key, Value: args.Value, ClerkId: args.ClerkId, OpId: args.OpId}
 	if args.Op == "Append" {
 		op.OpType = AppendOp
 	}
 	_, _, isLeader := kv.rf.Start(op)
-	DPrintf("[%d] start %s %s:%s", kv.me, args.Op, args.Key, args.Value)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	} else {
+		DPrintf("[%d] start %s %s:%s", kv.me, args.Op, args.Key, args.Value)
 		reply.Err = OK
 		kv.mu.Lock()
 		for kv.maxAppliedOpIdOfClerk[args.ClerkId] < args.OpId {
@@ -173,9 +208,12 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.make_end = make_end
 	kv.gid = gid
 	kv.ctrlers = ctrlers
+	kv.sm = shardctrler.MakeClerk(ctrlers)
 
 	// Your initialization code here.
-	kv.kvMap = make(map[string]string)
+	for i := 0; i < shardctrler.NShards; i++ {
+		kv.kvMaps[i] = make(map[string]string)
+	}
 	kv.maxAppliedOpIdOfClerk = make(map[int64]int)
 	kv.cond = sync.Cond{L: &kv.mu}
 
@@ -187,6 +225,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.readSnapshot(persister.ReadSnapshot())
 
 	go kv.apply()
+	go kv.detectConfigChange()
 	return kv
 }
 
@@ -207,18 +246,18 @@ func (kv *ShardKV) apply() {
 			continue
 		}
 		if op.OpType == GetOp {
-			DPrintf("[%d] get %s:%s", kv.me, op.Key, kv.kvMap[op.Key])
+			DPrintf("[%d] apply get %s:%s", kv.me, op.Key, kv.kvMaps[key2shard(op.Key)][op.Key])
 		} else if op.OpType == PutOp {
-			kv.kvMap[op.Key] = op.Value
-			DPrintf("[%d] put %s:%s", kv.me, op.Key, op.Value)
+			kv.kvMaps[key2shard(op.Key)][op.Key] = op.Value
+			DPrintf("[%d] apply put %s:%s", kv.me, op.Key, op.Value)
 		} else if op.OpType == AppendOp {
-			kv.kvMap[op.Key] += op.Value
-			DPrintf("[%d] append %s:%s,kvmap[%s]:%s", kv.me, op.Key, op.Value, op.Key, kv.kvMap[op.Key])
+			kv.kvMaps[key2shard(op.Key)][op.Key] += op.Value
+			DPrintf("[%d] apply append %s:%s,kvmap[%s]:%s", kv.me, op.Key, op.Value, op.Key, kv.kvMaps[key2shard(op.Key)][op.Key])
 		} else if op.OpType == NopOp {
 			// do nothing
-			DPrintf("[%d] nop", kv.me)
+			DPrintf("[%d] apply nop", kv.me)
 		} else {
-			log.Fatal("Unknown OpType")
+			log.Fatal("apply Unknown OpType")
 		}
 		if kv.maxAppliedOpIdOfClerk[op.ClerkId] < op.OpId {
 			kv.maxAppliedOpIdOfClerk[op.ClerkId] = op.OpId
@@ -227,8 +266,9 @@ func (kv *ShardKV) apply() {
 		if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize() > kv.maxraftstate {
 			w := new(bytes.Buffer)
 			e := labgob.NewEncoder(w)
-			e.Encode(kv.kvMap)
+			e.Encode(kv.kvMaps)
 			e.Encode(kv.maxAppliedOpIdOfClerk)
+			e.Encode(kv.shardIhave)
 			data := w.Bytes()
 			kv.rf.Snapshot(applyMsg.CommandIndex, data)
 		}
@@ -238,4 +278,40 @@ func (kv *ShardKV) apply() {
 
 func (kv *ShardKV) GetRaftStateSize() int {
 	return kv.rf.GetRaftStateSize()
+}
+
+func (kv *ShardKV) detectConfigChange() {
+	for {
+		if kv.rf.Killed() {
+			return
+		}
+		var isLeader bool
+		if _, isLeader = kv.rf.GetState(); !isLeader {
+			DPrintf("[%d] isLeader:%v", kv.me, isLeader)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		DPrintf("[%d] isLeader:%v", kv.me, isLeader)
+		newConfig := kv.sm.Query(-1)
+		if newConfig.Num != kv.config.Num {
+			fmt.Println(newConfig)
+			kv.waitForConfig.Add(1)
+			DPrintf("[%d] waitForOp", kv.me)
+			kv.waitForOp.Wait()
+			//todo
+			kv.config = newConfig
+			for i := 0; i < shardctrler.NShards; i++ {
+				if kv.config.Shards[i] == kv.gid {
+					kv.shardIhave[i] = true
+				} else {
+					//kv.shardIhave[i] = false
+				}
+			}
+			fmt.Printf("[%d] shardIhave:%v\n", kv.me, kv.shardIhave)
+			//todo
+			kv.waitForConfig.Done()
+			DPrintf("[%d] done waitForConfig", kv.me)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

@@ -58,7 +58,7 @@ def main(
                 print(cols)
             else:
                 color = "white"
-                msg = f"[{color}]{msg}[/{color}]"
+                msg = f"[{color}]{line}[/{color}]"
                 print(msg)
         except:
             color = "white"

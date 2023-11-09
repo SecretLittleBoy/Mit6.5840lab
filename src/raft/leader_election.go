@@ -65,6 +65,7 @@ func (rf *Raft) candidateRequestVote(args RequestVoteArgs, peer int, voteCount *
 					}
 					rf.distributeEntries(true)
 					DPrintf("[%d] becomes leader in term %d\n", rf.me, rf.currentTerm)
+					//println("[", rf.me, "] become leader", "term:", rf.currentTerm)
 				})
 				return
 			}
