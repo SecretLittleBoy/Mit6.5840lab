@@ -20,6 +20,17 @@ func check(t *testing.T, ck *Clerk, key string, value string) {
 	}
 }
 
+func TestBasic(t *testing.T) {
+	fmt.Printf("Test: Basic ...\n")
+	cfg := make_config(t, 3, false, -1)
+	defer cfg.cleanup()
+
+	cfg.makeClient()
+	cfg.join(0)
+
+	time.Sleep(1 * time.Second)
+}
+
 // test static 2-way sharding, without shard movement.
 func TestStaticShards(t *testing.T) {
 	fmt.Printf("Test: static shards ...\n")

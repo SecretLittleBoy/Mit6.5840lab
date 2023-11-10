@@ -2,7 +2,7 @@ package shardkv
 
 import (
 	"bytes"
-	"fmt"
+	//"fmt"
 	"log"
 	"sync"
 	"time"
@@ -23,7 +23,9 @@ const (
 	PutOp
 	AppendOp
 	GetShardOp
+	DeleteShardOp
 	ReplaceShardOp
+	UpdateConfigOp
 	NopOp
 )
 
@@ -66,6 +68,15 @@ type ShardKV struct {
 
 	waitForConfig sync.WaitGroup
 	waitForOp     sync.WaitGroup
+
+	ClerkId  int64
+	nextOpId int
+}
+
+func (kv *ShardKV) getNextOpId() int {
+	nextOpIdBackup := kv.nextOpId
+	kv.nextOpId++
+	return nextOpIdBackup
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -122,6 +133,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	defer kv.waitForOp.Done()
 	if _, isleader := kv.rf.GetState(); isleader && !kv.shardIhave[key2shard(args.Key)] {
 		reply.Err = ErrWrongGroup
+		DPrintf("[%d] %s %s:%s. ErrWrongGroup", kv.me, args.Op, args.Key, args.Value)
 		return
 	}
 	op := Op{OpType: PutOp, Key: args.Key, Value: args.Value, ClerkId: args.ClerkId, OpId: args.OpId}
@@ -217,6 +229,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.maxAppliedOpIdOfClerk = make(map[int64]int)
 	kv.cond = sync.Cond{L: &kv.mu}
 
+	kv.nextOpId = 1
+	kv.ClerkId = nrand()
+
 	// Use something like this to talk to the shardctrler:
 	// kv.mck = shardctrler.MakeClerk(kv.ctrlers)
 
@@ -256,6 +271,19 @@ func (kv *ShardKV) apply() {
 		} else if op.OpType == NopOp {
 			// do nothing
 			DPrintf("[%d] apply nop", kv.me)
+		} else if op.OpType == GetShardOp {
+			DPrintf("[%d] apply getShard %d", kv.me, op.Shard)
+			kv.shardIhave[op.Shard] = false
+		} else if op.OpType == DeleteShardOp {
+			DPrintf("[%d] apply deleteShard %d", kv.me, op.Shard)
+			delete(kv.kvMaps[op.Shard], op.Key)
+		} else if op.OpType == ReplaceShardOp {
+			DPrintf("[%d] apply replaceShard %d", kv.me, op.Shard)
+			kv.kvMaps[op.Shard] = op.KvMap
+			kv.shardIhave[op.Shard] = true
+		} else if op.OpType == UpdateConfigOp {
+			DPrintf("[%d] apply updateConfig %d", kv.me, op.Shard)
+			kv.config = kv.sm.Query(op.Shard)
 		} else {
 			log.Fatal("apply Unknown OpType")
 		}
@@ -294,24 +322,213 @@ func (kv *ShardKV) detectConfigChange() {
 		DPrintf("[%d] isLeader:%v", kv.me, isLeader)
 		newConfig := kv.sm.Query(-1)
 		if newConfig.Num != kv.config.Num {
-			fmt.Println(newConfig)
+			DPrintf("[%d] newConfig:%v", kv.me, newConfig)
 			kv.waitForConfig.Add(1)
 			DPrintf("[%d] waitForOp", kv.me)
 			kv.waitForOp.Wait()
-			//todo
-			kv.config = newConfig
-			for i := 0; i < shardctrler.NShards; i++ {
-				if kv.config.Shards[i] == kv.gid {
-					kv.shardIhave[i] = true
-				} else {
-					//kv.shardIhave[i] = false
+			var UpdateConfigReply UpdateConfigReply
+			UpdateConfigArgs := UpdateConfigArgs{ConfigNum: newConfig.Num, ClerkId: kv.ClerkId, OpId: kv.getNextOpId()}
+			for i := 0; i < shardctrler.NShards; i++ { //遍历每个shard
+				if newConfig.Shards[i] == kv.gid && kv.config.Shards[i] != kv.gid { //get new shard
+					gid := kv.config.Shards[i]
+					if gid == 0 {
+						emptyKvMap := make(map[string]string)
+						replaceSharkArg := replaceSharkArgs{Shard: i, KvMap: emptyKvMap, ClerkId: kv.ClerkId, OpId: kv.getNextOpId()}
+						var replaceShardReply replaceSharkReply
+						kv.ReplaceShark(&replaceSharkArg, &replaceShardReply)
+						if replaceShardReply.Err == ErrWrongLeader {
+							goto END //如果不是leader了，退出,config不变
+						}
+						continue
+					}
+					servers, ok := kv.config.Groups[gid]
+					if !ok {
+						servers, ok = newConfig.Groups[gid]
+						if !ok {
+							log.Fatal("detectConfigChange: can't find servers")
+						}
+					}
+					si := -1
+					for {
+						si = (si + 1) % len(servers)
+						srv := kv.make_end(servers[si])
+						var reply GetShardReply
+						args := GetShardArgs{Shard: i, ClerkId: kv.ClerkId, OpId: kv.getNextOpId()}
+						ok := srv.Call("ShardKV.GetShard", &args, &reply) //先取回shard
+						if ok && reply.Err == OK {
+							replaceSharkArg := replaceSharkArgs{Shard: i, KvMap: reply.KvMap, ClerkId: kv.ClerkId, OpId: kv.getNextOpId()}
+							var replaceShardReply replaceSharkReply
+							kv.ReplaceShark(&replaceSharkArg, &replaceShardReply)
+							if replaceShardReply.Err == ErrWrongLeader {
+								goto END //如果不是leader了，退出,config不变
+							}
+							deleteShardArg := DeleteShardArgs{Shard: i, ClerkId: kv.ClerkId, OpId: kv.getNextOpId()}
+							var deleteShardReply DeleteShardReply
+							deleteShardOK := false
+							for !deleteShardOK { //要求对方删除shard
+								deleteShardOK = srv.Call("ShardKV.DeleteShard", &deleteShardArg, &deleteShardReply)
+								si = (si + 1) % len(servers)
+								srv = kv.make_end(servers[si])
+							}
+							break //一个shard处理完毕
+						}
+					}
 				}
 			}
-			fmt.Printf("[%d] shardIhave:%v\n", kv.me, kv.shardIhave)
+			kv.UpdateConfig(&UpdateConfigArgs, &UpdateConfigReply) //更新config
+			if UpdateConfigReply.Err == ErrWrongLeader {
+				goto END //如果不是leader了，退出,config不变
+			}
+			kv.config = newConfig
+			DPrintf("[%d] shardIhave:%v", kv.me, kv.shardIhave)
 			//todo
+		END:
 			kv.waitForConfig.Done()
 			DPrintf("[%d] done waitForConfig", kv.me)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// shard操作时不能对外服务，getShard需要立即设置shardIhave为false，停止对外服务。
+// 但是不能立即删除shard，因为getShard的回复可能丢包
+func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
+	op := Op{OpType: GetShardOp, Shard: args.Shard, ClerkId: args.ClerkId, OpId: args.OpId}
+	_, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	} else {
+		reply.Err = OK
+		kv.mu.Lock()
+		for kv.maxAppliedOpIdOfClerk[args.ClerkId] < args.OpId {
+			kv.mu.Unlock()
+			appliedOneOp := make(chan struct{})
+			go func() {
+				kv.mu.Lock()
+				kv.cond.Wait()
+				close(appliedOneOp)
+				kv.mu.Unlock()
+			}()
+			select {
+			case <-appliedOneOp:
+			case <-time.After(100 * time.Millisecond):
+				reply.Err = ErrWrongLeader
+			}
+			if reply.Err == ErrWrongLeader {
+				break
+			}
+			kv.mu.Lock()
+		}
+		if reply.Err != ErrWrongLeader {
+			reply.KvMap = kv.kvMaps[args.Shard]
+			kv.mu.Unlock()
+		}
+		return
+	}
+}
+
+func (kv *ShardKV) DeleteShard(args *DeleteShardArgs, reply *DeleteShardReply) {
+	op := Op{OpType: ReplaceShardOp, Shard: args.Shard, ClerkId: args.ClerkId, OpId: args.OpId}
+	_, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	} else {
+		reply.Err = OK
+		kv.mu.Lock()
+		for kv.maxAppliedOpIdOfClerk[args.ClerkId] < args.OpId {
+			kv.mu.Unlock()
+			appliedOneOp := make(chan struct{})
+			go func() {
+				kv.mu.Lock()
+				kv.cond.Wait()
+				close(appliedOneOp)
+				kv.mu.Unlock()
+			}()
+			select {
+			case <-appliedOneOp:
+			case <-time.After(100 * time.Millisecond):
+				reply.Err = ErrWrongLeader
+			}
+			if reply.Err == ErrWrongLeader {
+				break
+			}
+			kv.mu.Lock()
+		}
+		if reply.Err == OK {
+			kv.mu.Unlock()
+		}
+		return
+	}
+}
+
+func (kv *ShardKV) ReplaceShark(args *replaceSharkArgs, reply *replaceSharkReply) {
+	op := Op{OpType: ReplaceShardOp, Shard: args.Shard, KvMap: args.KvMap, ClerkId: args.ClerkId, OpId: args.OpId}
+	_, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	} else {
+		reply.Err = OK
+		kv.mu.Lock()
+		for kv.maxAppliedOpIdOfClerk[args.ClerkId] < args.OpId {
+			kv.mu.Unlock()
+			appliedOneOp := make(chan struct{})
+			go func() {
+				kv.mu.Lock()
+				kv.cond.Wait()
+				close(appliedOneOp)
+				kv.mu.Unlock()
+			}()
+			select {
+			case <-appliedOneOp:
+			case <-time.After(100 * time.Millisecond):
+				reply.Err = ErrWrongLeader
+			}
+			if reply.Err == ErrWrongLeader {
+				break
+			}
+			kv.mu.Lock()
+		}
+		if reply.Err == OK {
+			kv.mu.Unlock()
+		}
+		return
+	}
+}
+
+func (kv *ShardKV) UpdateConfig(args *UpdateConfigArgs, reply *UpdateConfigReply) {
+	op := Op{OpType: UpdateConfigOp, ClerkId: args.ClerkId, OpId: args.OpId, Shard: args.ConfigNum}
+	_, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	} else {
+		reply.Err = OK
+		kv.mu.Lock()
+		for kv.maxAppliedOpIdOfClerk[args.ClerkId] < args.OpId {
+			kv.mu.Unlock()
+			appliedOneOp := make(chan struct{})
+			go func() {
+				kv.mu.Lock()
+				kv.cond.Wait()
+				close(appliedOneOp)
+				kv.mu.Unlock()
+			}()
+			select {
+			case <-appliedOneOp:
+			case <-time.After(100 * time.Millisecond):
+				reply.Err = ErrWrongLeader
+			}
+			if reply.Err == ErrWrongLeader {
+				break
+			}
+			kv.mu.Lock()
+		}
+		if reply.Err == OK {
+			kv.mu.Unlock()
+		}
+		return
 	}
 }
