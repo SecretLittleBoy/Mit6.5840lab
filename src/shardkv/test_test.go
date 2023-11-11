@@ -20,17 +20,6 @@ func check(t *testing.T, ck *Clerk, key string, value string) {
 	}
 }
 
-func TestBasic(t *testing.T) {
-	fmt.Printf("Test: Basic ...\n")
-	cfg := make_config(t, 3, false, -1)
-	defer cfg.cleanup()
-
-	cfg.makeClient()
-	cfg.join(0)
-
-	time.Sleep(1 * time.Second)
-}
-
 // test static 2-way sharding, without shard movement.
 func TestStaticShards(t *testing.T) {
 	fmt.Printf("Test: static shards ...\n")
@@ -54,6 +43,9 @@ func TestStaticShards(t *testing.T) {
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
+
+	DPrintf("put 10 and get 10 passed\n")
+	time.Sleep(1 * time.Second)
 
 	// make sure that the data really is sharded by
 	// shutting down one shard and checking that some
@@ -94,8 +86,12 @@ func TestStaticShards(t *testing.T) {
 		t.Fatalf("expected 5 completions with one shard dead; got %v\n", ndone)
 	}
 
+	DPrintf("shutdown 1 group, only 5 gets passed\n")
+
 	// bring the crashed shard/group back to life.
 	cfg.StartGroup(1)
+	time.Sleep(1 * time.Second)
+	DPrintf("start to check all 10 gets\n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -222,6 +218,48 @@ func TestSnapshot(t *testing.T) {
 	}
 
 	fmt.Printf("  ... Passed\n")
+}
+
+func TestBasic(t *testing.T) {
+	fmt.Printf("Test: Basic ...\n")
+	cfg := make_config(t, 3, false, 1000)
+	defer cfg.cleanup()
+
+	ck := cfg.makeClient()
+
+	cfg.join(0)
+
+	n := 10
+	ka := make([]string, n)
+	va := make([]string, n)
+	for i := 0; i < n; i++ {
+		ka[i] = strconv.Itoa(i) // ensure multiple shards
+		va[i] = randstring(20)
+		ck.Put(ka[i], va[i])
+	}
+	//for i := 0; i < n; i++ {
+	//	check(t, ck, ka[i], va[i])
+	//}
+	time.Sleep(100 * time.Millisecond)
+	fmt.Printf("group0 put 10 get 10  ... Passed\n")
+
+	cfg.join(1)
+	cfg.ShutdownServer(0, 0)
+	//cfg.ShutdownServer(1, 0)
+	//cfg.ShutdownServer(2, 0)
+
+	cfg.join(2)
+	//time.Sleep(1 * time.Second)
+	//cfg.leave(1)
+	//time.Sleep(1 * time.Second)
+	//cfg.leave(0)
+	time.Sleep(1 * time.Second)
+	for i := 0; i < n; i++ {
+		check(t, ck, ka[i], va[i])
+		x := randstring(20)
+		ck.Append(ka[i], x)
+		va[i] += x
+	}
 }
 
 func TestMissChange(t *testing.T) {

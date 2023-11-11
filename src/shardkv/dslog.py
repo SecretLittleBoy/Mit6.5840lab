@@ -18,18 +18,20 @@ def main(
 
     # We can take input from a stdin (pipes) or from a file
     input_ = file if file else sys.stdin
-    n_columns = n_columns if n_columns else 3
+    n_columns = n_columns if n_columns else 9
 
     console = Console()
     width = console.size.width
 
     panic = False
     for line in input_:
+        line = line.replace("[", "(")
+        line = line.replace("]", ")")
         try:
             data, time, server, *msg = line.split(' ')
             msg = " ".join(msg)
             msg = server + " " + msg
-            if (server == "[0]"):
+            if (server == "(100:0)"):
                 color = "green"
                 msg = f"[{color}]{msg}[/{color}]"
                 cols = ["" for _ in range(n_columns)]
@@ -38,7 +40,7 @@ def main(
                 cols = Columns(cols, width=col_width - 1,
                                equal=True, expand=True)
                 print(cols)
-            elif (server == "[1]"):
+            elif (server == "(100:1)"):
                 color = "blue"
                 msg = f"[{color}]{msg}[/{color}]"
                 cols = ["" for _ in range(n_columns)]
@@ -47,11 +49,65 @@ def main(
                 cols = Columns(cols, width=col_width - 1,
                                equal=True, expand=True)
                 print(cols)
-            elif (server == "[2]"):
+            elif (server == "(100:2)"):
                 color = "red"
                 msg = f"[{color}]{msg}[/{color}]"
                 cols = ["" for _ in range(n_columns)]
                 cols[2] = ""+msg
+                col_width = int(width / n_columns)
+                cols = Columns(cols, width=col_width - 1,
+                               equal=True, expand=True)
+                print(cols)
+            elif (server == "(101:0)"):
+                color = "green"
+                msg = f"[{color}]{msg}[/{color}]"
+                cols = ["" for _ in range(n_columns)]
+                cols[3] = ""+msg
+                col_width = int(width / n_columns)
+                cols = Columns(cols, width=col_width - 1,
+                               equal=True, expand=True)
+                print(cols)
+            elif (server == "(101:1)"):
+                color = "blue"
+                msg = f"[{color}]{msg}[/{color}]"
+                cols = ["" for _ in range(n_columns)]
+                cols[4] = ""+msg
+                col_width = int(width / n_columns)
+                cols = Columns(cols, width=col_width - 1,
+                               equal=True, expand=True)
+                print(cols)
+            elif (server == "(101:2)"):
+                color = "red"
+                msg = f"[{color}]{msg}[/{color}]"
+                cols = ["" for _ in range(n_columns)]
+                cols[5] = ""+msg
+                col_width = int(width / n_columns)
+                cols = Columns(cols, width=col_width - 1,
+                               equal=True, expand=True)
+                print(cols)
+            elif (server == "(102:0)"):
+                color = "green"
+                msg = f"[{color}]{msg}[/{color}]"
+                cols = ["" for _ in range(n_columns)]
+                cols[6] = ""+msg
+                col_width = int(width / n_columns)
+                cols = Columns(cols, width=col_width - 1,
+                               equal=True, expand=True)
+                print(cols)
+            elif (server == "(102:1)"):
+                color = "blue"
+                msg = f"[{color}]{msg}[/{color}]"
+                cols = ["" for _ in range(n_columns)]
+                cols[7] = ""+msg
+                col_width = int(width / n_columns)
+                cols = Columns(cols, width=col_width - 1,
+                               equal=True, expand=True)
+                print(cols)
+            elif (server == "(102:2)"):
+                color = "red"
+                msg = f"[{color}]{msg}[/{color}]"
+                cols = ["" for _ in range(n_columns)]
+                cols[8] = ""+msg
                 col_width = int(width / n_columns)
                 cols = Columns(cols, width=col_width - 1,
                                equal=True, expand=True)

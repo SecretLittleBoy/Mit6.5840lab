@@ -14,6 +14,7 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrConfigTooOld = "ErrConfigTooOld"
 )
 
 type Err string
@@ -49,6 +50,7 @@ type GetReply struct {
 
 type GetShardArgs struct {
 	Shard   int
+	Gid     int
 	ClerkId int64
 	OpId    int
 }
@@ -86,5 +88,14 @@ type UpdateConfigArgs struct {
 }
 
 type UpdateConfigReply struct {
+	Err Err
+}
+
+type NopOpArgs struct {
+	ClerkId int64
+	OpId    int
+}
+
+type NopOpReply struct {
 	Err Err
 }
